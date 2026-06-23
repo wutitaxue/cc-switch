@@ -1340,6 +1340,11 @@ pub fn run() {
             commands::add_skill_repo,
             commands::remove_skill_repo,
             commands::install_skills_from_zip,
+            // Traffic Inspector（流量检查器）
+            commands::get_captured_traffic,
+            commands::clear_captured_traffic,
+            commands::set_traffic_capture_enabled,
+            commands::get_traffic_capture_enabled,
             // Auto launch
             commands::set_auto_launch,
             commands::get_auto_launch_status,

@@ -2902,5 +2902,57 @@
     "expiredHint": "请运行 {{tool}} 命令刷新登录",
     "queryFailed": "查询失败",
     "refresh": "刷新"
+  },
+  "inspector": {
+    "title": "流量检查器",
+    "subtitle": "实时查看 Claude Code 发往 API 的请求与响应",
+    "clear": "清空",
+    "count": "{{count}} 条请求",
+    "empty": "暂无捕获。开启代理并使用 Claude Code 后将实时出现。",
+    "selectHint": "选择左侧一条请求查看详情",
+    "search": "搜索…",
+    "noResponse": "暂无响应",
+    "streaming": "流式响应进行中或仅记录原始 SSE",
+    "tab": {
+      "request": "请求",
+      "response": "响应",
+      "anatomy": "解剖"
+    },
+    "anatomy": {
+      "empty": "未检测到特殊机制",
+      "claudeMdTitle": "CLAUDE.md — system-reminder 注入",
+      "claudeMdDesc": "Claude Code 把项目/全局 CLAUDE.md 内容包在 <system-reminder> 标签里注入到 messages[]",
+      "outputStyleTitle": "Output Style — system[] 额外块",
+      "outputStyleDesc": "Claude Code 在 system 数组里追加了额外块（控制模型回复风格）",
+      "slashTitle": "① 输入 — Slash 命令",
+      "slashDesc": "用户输入 /{{cmd}} 时，Claude Code 用 <command-message> 标签包裹后注入提示",
+      "skillTitle": "Skill (tool_use → tool_result)",
+      "skillDesc": "Claude 通过 tool_use 调用 Skill 并通过 tool_result 接收结果",
+      "skillLinkedTitle": "② 执行 — Skill (tool_use → tool_result)",
+      "skillLinkedDesc": "Claude 读取上面的斜杠命令，通过 tool_use 调用对应 Skill",
+      "subAgentDesc": "Claude 通过 Task 工具创建独立子代理 API 请求（运行在隔离的上下文中）",
+      "mcpDesc": "通过 tool_use 调用 Model Context Protocol 工具",
+      "noToolResult": "无 tool_result（在下条消息或尚未返回）"
+    },
+    "mech": {
+      "claudeMd": "CLAUDE.md",
+      "outputStyle": "输出风格",
+      "slash": "斜杠命令",
+      "skill": "Skill",
+      "subAgent": "子代理",
+      "mcp": "MCP 工具"
+    },
+    "cost": {
+      "item": "项目",
+      "cost": "成本",
+      "total": "合计",
+      "cacheRead": "缓存读",
+      "cacheWrite": "缓存写",
+      "uncachedInput": "未缓存输入",
+      "output": "输出",
+      "noteApi": "🔑 API 计价",
+      "noteSubscription": "🎫 订阅计价（缓存读免费）",
+      "pricingDate": "价格基准 {{date}}"
+    }
   }
 }
