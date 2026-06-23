@@ -43,6 +43,50 @@ use http_body_util::BodyExt;
 use serde_json::{json, Value};
 
 // ============================================================================
+
+/// 旁路捕获请求到全局 Inspector 缓冲（捕获关闭时为空操作）。
+/// 在 ctx 建好、转发之前调用：设置 ctx.capture_id 并向前端 emit 新请求。
+/// 任何失败都不影响请求转发。
+fn capture_request(ctx: &mut RequestContext, method: &str, path: &str, body: &Value) {
+    let buf = super::capture::buffer();
+    if !buf.is_enabled() {
+        return;
+    }
+    let ts = chrono::Utc::now().timestamp_millis();
+    let is_api_key = !ctx.provider.uses_managed_account_auth();
+    let id = buf.push_request(
+        ts,
+        ctx.app_type_str.to_string(),
+        method.to_string(),
+        path.to_string(),
+        Some(ctx.request_model.clone()),
+        Some(ctx.session_id.clone()),
+        Some(ctx.provider.id.clone()),
+        body.clone(),
+        is_api_key,
+    );
+    ctx.capture_id = Some(id);
+    if let Some(rec) = buf.get(id) {
+        super::capture::notify_traffic_captured(&rec);
+    }
+}
+
+/// 旁路补全响应到 Inspector 缓冲（仅透传路径调用）。
+pub(crate) fn capture_response(
+    capture_id: Option<u64>,
+    status: u16,
+    is_streaming: bool,
+    body: Option<Value>,
+) {
+    let Some(id) = capture_id else {
+        return;
+    };
+    let buf = super::capture::buffer();
+    if let Some(rec) = buf.attach_response(id, status, is_streaming, body) {
+        super::capture::notify_traffic_captured(&rec);
+    }
+}
+
 // 健康检查和状态查询（简单端点）
 // ============================================================================
 
@@ -177,6 +221,8 @@ async fn handle_messages_for_app(
     let endpoint = strip_prefix
         .and_then(|prefix| raw_endpoint.strip_prefix(prefix))
         .unwrap_or(raw_endpoint);
+
+    capture_request(&mut ctx, method.as_str(), endpoint, &body);
 
     let is_stream = body
         .get("stream")
@@ -401,6 +447,9 @@ async fn handle_claude_transform(
             usage_collector,
             timeout_config,
             connection_guard,
+            None,
+            None,
+            0,
         );
 
         let mut headers = axum::http::HeaderMap::new();
@@ -594,6 +643,8 @@ pub async fn handle_chat_completions(
         RequestContext::new(&state, &body, &headers, AppType::Codex, "Codex", "codex").await?;
     let endpoint = endpoint_with_query(&uri, "/chat/completions");
 
+    capture_request(&mut ctx, method.as_str(), &endpoint, &body);
+
     let is_stream = body
         .get("stream")
         .and_then(|v| v.as_bool())
@@ -658,6 +709,8 @@ pub async fn handle_responses(
     let mut ctx =
         RequestContext::new(&state, &body, &headers, AppType::Codex, "Codex", "codex").await?;
     let endpoint = endpoint_with_query(&uri, "/responses");
+
+    capture_request(&mut ctx, method.as_str(), &endpoint, &body);
 
     let is_stream = body
         .get("stream")
@@ -736,6 +789,8 @@ pub async fn handle_responses_compact(
     let mut ctx =
         RequestContext::new(&state, &body, &headers, AppType::Codex, "Codex", "codex").await?;
     let endpoint = endpoint_with_query(&uri, "/responses/compact");
+
+    capture_request(&mut ctx, method.as_str(), &endpoint, &body);
 
     let is_stream = body
         .get("stream")
@@ -885,6 +940,9 @@ async fn handle_codex_chat_to_responses_transform(
             usage_collector,
             ctx.streaming_timeout_config(),
             connection_guard,
+            None,
+            None,
+            0,
         );
 
         let mut headers = axum::http::HeaderMap::new();
@@ -1313,6 +1371,10 @@ pub async fn handle_gemini(
         .path_and_query()
         .map(|pq| pq.as_str())
         .unwrap_or(uri.path());
+
+    if !body.is_null() {
+        capture_request(&mut ctx, method.as_str(), endpoint, &body);
+    }
 
     let is_stream = body
         .get("stream")

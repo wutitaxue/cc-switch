@@ -237,12 +237,18 @@ pub async fn handle_streaming(
     let timeout_config = ctx.streaming_timeout_config();
 
     // 创建带日志和超时的透传流
+    let response_sink = ctx
+        .capture_id
+        .map(|_| super::capture::SseResponseCollector::new());
     let logged_stream = create_logged_passthrough_stream(
         stream,
         ctx.tag,
         usage_collector,
         timeout_config,
         connection_guard,
+        response_sink,
+        ctx.capture_id,
+        status.as_u16(),
     );
 
     let body = axum::body::Body::from_stream(logged_stream);
@@ -357,6 +363,12 @@ pub async fn handle_non_streaming(
     let mut builder = axum::response::Response::builder().status(status);
     for (key, value) in response_headers.iter() {
         builder = builder.header(key, value);
+    }
+
+    // 旁路补全 Inspector 捕获（非流式：整包响应已读到）
+    if ctx.capture_id.is_some() {
+        let json = serde_json::from_slice::<Value>(&body_bytes).ok();
+        super::handlers::capture_response(ctx.capture_id, status.as_u16(), false, json);
     }
 
     let body = axum::body::Body::from(body_bytes);
@@ -725,12 +737,16 @@ async fn log_usage_internal(
 }
 
 /// 创建带日志记录和超时控制的透传流
+#[allow(clippy::too_many_arguments)]
 pub fn create_logged_passthrough_stream(
     stream: impl Stream<Item = Result<Bytes, std::io::Error>> + Send + 'static,
     tag: &'static str,
     usage_collector: Option<SseUsageCollector>,
     timeout_config: StreamingTimeoutConfig,
     connection_guard: Option<ActiveConnectionGuard>,
+    response_sink: Option<super::capture::SseResponseCollector>,
+    capture_id: Option<u64>,
+    status_code: u16,
 ) -> impl Stream<Item = Result<Bytes, std::io::Error>> + Send {
     async_stream::stream! {
         let _conn_guard = connection_guard;
@@ -739,7 +755,7 @@ pub fn create_logged_passthrough_stream(
         let mut collector = usage_collector;
         let mut finish_guard = collector.clone().map(SseUsageFinishGuard::new);
         let inspect_sse_events =
-            collector.is_some() || log::log_enabled!(log::Level::Debug);
+            collector.is_some() || response_sink.is_some() || log::log_enabled!(log::Level::Debug);
         let mut is_first_chunk = true;
 
         // 超时配置
@@ -791,6 +807,10 @@ pub fn create_logged_passthrough_stream(
                     }
                     is_first_chunk = false;
                     if inspect_sse_events {
+                        // 旁路给 Inspector 攒一份原始 SSE 文本
+                        if let Some(sink) = &response_sink {
+                            sink.push_chunk(&String::from_utf8_lossy(&bytes));
+                        }
                         crate::proxy::sse::append_utf8_safe(&mut buffer, &mut utf8_remainder, &bytes);
 
                         // 尝试解析并记录完整的 SSE 事件
@@ -845,6 +865,13 @@ pub fn create_logged_passthrough_stream(
         }
         if let Some(guard) = &mut finish_guard {
             guard.disarm();
+        }
+
+        // 旁路补全 Inspector 捕获（流式：把 SSE 重建成完整 message JSON 作为响应体，
+        // 对标 claude-inspector 的 parseSseStream）
+        if let Some(sink) = &response_sink {
+            let body = sink.take_reconstructed();
+            super::handlers::capture_response(capture_id, status_code, true, body);
         }
     }
 }

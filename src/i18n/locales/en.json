@@ -2868,5 +2868,57 @@
     "expiredHint": "Run the {{tool}} command to refresh your login",
     "queryFailed": "Query failed",
     "refresh": "Refresh"
+  },
+  "inspector": {
+    "title": "Traffic Inspector",
+    "subtitle": "See what Claude Code sends to the API, in real time",
+    "clear": "Clear",
+    "count": "{{count}} requests",
+    "empty": "No captures yet. They appear live once the proxy is on and Claude Code is used.",
+    "selectHint": "Select a request on the left to view details",
+    "search": "Search…",
+    "noResponse": "No response",
+    "streaming": "Streaming in progress or raw SSE only",
+    "tab": {
+      "request": "Request",
+      "response": "Response",
+      "anatomy": "Anatomy"
+    },
+    "anatomy": {
+      "empty": "No special mechanisms detected",
+      "claudeMdTitle": "CLAUDE.md — system-reminder injection",
+      "claudeMdDesc": "Claude Code wraps project/global CLAUDE.md contents in <system-reminder> tags and inserts them inside messages[]",
+      "outputStyleTitle": "Output Style — system[] extra block",
+      "outputStyleDesc": "Claude Code inserts an extra block in the system prompt array (controls model response style)",
+      "slashTitle": "① Input — Slash Command",
+      "slashDesc": "When user types /{{cmd}}, Claude Code wraps it in <command-message> tags and injects it into the prompt",
+      "skillTitle": "Skill (tool_use → tool_result)",
+      "skillDesc": "Claude invokes a skill via tool_use and receives the result via tool_result",
+      "skillLinkedTitle": "② Execute — Skill (tool_use → tool_result)",
+      "skillLinkedDesc": "Claude reads the slash command above and calls the matching skill via tool_use",
+      "subAgentDesc": "Claude creates an isolated sub-agent API request via the Task tool (runs in a separate context)",
+      "mcpDesc": "Calls a Model Context Protocol tool via tool_use",
+      "noToolResult": "No tool_result (in the next message or not yet received)"
+    },
+    "mech": {
+      "claudeMd": "CLAUDE.md",
+      "outputStyle": "Output Style",
+      "slash": "Slash Cmd",
+      "skill": "Skill",
+      "subAgent": "Sub-Agent",
+      "mcp": "MCP Tool"
+    },
+    "cost": {
+      "item": "Item",
+      "cost": "Cost",
+      "total": "Total",
+      "cacheRead": "Cache Read",
+      "cacheWrite": "Cache Write",
+      "uncachedInput": "Uncached Input",
+      "output": "Output",
+      "noteApi": "🔑 API pricing",
+      "noteSubscription": "🎫 Subscription pricing (cache read free)",
+      "pricingDate": "Prices as of {{date}}"
+    }
   }
 }

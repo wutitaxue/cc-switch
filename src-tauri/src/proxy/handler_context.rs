@@ -70,6 +70,9 @@ pub struct RequestContext {
     pub optimizer_config: OptimizerConfig,
     /// Copilot 优化器配置
     pub copilot_optimizer_config: CopilotOptimizerConfig,
+    /// 流量捕获记录 id（Inspector 用）。捕获关闭时为 None，
+    /// 随 ctx 流转到响应处理处，用于按 id 补全响应。
+    pub capture_id: Option<u64>,
 }
 
 impl RequestContext {
@@ -173,6 +176,7 @@ impl RequestContext {
             rectifier_config,
             optimizer_config,
             copilot_optimizer_config,
+            capture_id: None,
         })
     }
 
