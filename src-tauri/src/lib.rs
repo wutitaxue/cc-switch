@@ -1300,6 +1300,10 @@ pub fn run() {
             commands::add_skill_repo,
             commands::remove_skill_repo,
             commands::install_skills_from_zip,
+            // Skill GitHub 备份
+            commands::scan_skill_backup_candidates,
+            commands::backup_skills_to_github,
+            commands::github_backup_save_settings,
             // Auto launch
             commands::set_auto_launch,
             commands::get_auto_launch_status,

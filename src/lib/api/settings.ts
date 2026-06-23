@@ -3,6 +3,7 @@ import type {
   Settings,
   WebDavSyncSettings,
   S3SyncSettings,
+  GitHubBackupSettings,
   RemoteSnapshotInfo,
 } from "@/types";
 import type { AppId } from "./types";
@@ -200,6 +201,18 @@ export const settingsApi = {
 
   async s3SyncFetchRemoteInfo(): Promise<RemoteSnapshotInfo | { empty: true }> {
     return await invoke("s3_sync_fetch_remote_info");
+  },
+
+  // ===== GitHub Backup API =====
+
+  async githubBackupSaveSettings(
+    settings: GitHubBackupSettings,
+    tokenTouched = false,
+  ): Promise<{ success: boolean }> {
+    return await invoke("github_backup_save_settings", {
+      settings,
+      tokenTouched,
+    });
   },
 
   async syncCurrentProvidersLive(): Promise<void> {

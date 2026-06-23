@@ -303,6 +303,16 @@ export interface S3SyncSettings {
   status?: WebDavSyncStatus;
 }
 
+// GitHub 备份配置（skill 备份到 GitHub 仓库）
+export interface GitHubBackupSettings {
+  enabled?: boolean;
+  token?: string;
+  remoteUrl?: string;
+  branch?: string;
+  localDir?: string;
+  status?: WebDavSyncStatus;
+}
+
 export type RemoteSnapshotLayout = "current" | "legacy";
 
 // 远端快照信息（下载前预览）
@@ -403,6 +413,9 @@ export interface Settings {
 
   // ===== S3 同步设置 =====
   s3Sync?: S3SyncSettings;
+
+  // ===== GitHub 备份设置 =====
+  githubBackup?: GitHubBackupSettings;
 
   // ===== 备份策略设置 =====
   // Auto-backup interval in hours (0=disabled, default 24)

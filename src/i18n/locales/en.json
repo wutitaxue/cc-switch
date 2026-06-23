@@ -446,6 +446,20 @@
     "configExported": "Config exported to:",
     "exportFailed": "Export failed",
     "selectFileFailed": "Please choose a valid SQL backup file",
+    "githubBackup": {
+      "title": "GitHub Backup",
+      "description": "Back up skills to your own GitHub repository",
+      "enable": "Enable GitHub backup",
+      "enableHint": "Back up skills to your own GitHub repository",
+      "localDir": "Local repository directory",
+      "remoteUrl": "Remote repository URL",
+      "branch": "Branch",
+      "token": "GitHub Token (PAT)",
+      "tokenSaved": "(saved, leave blank to keep)",
+      "tokenHint": "The token is embedded into the remote URL for pushing and stored locally only.",
+      "browse": "Choose directory",
+      "saved": "Saved"
+    },
     "configCorrupted": "SQL file may be corrupted or invalid",
     "backupId": "Backup ID",
     "backupManager": {
@@ -2192,6 +2206,24 @@
     "notFound": "Skill not found",
     "backup": {
       "location": "Backup location: {{path}}"
+    },
+    "backupToGithub": {
+      "button": "Backup to GitHub",
+      "title": "Backup Skills to GitHub",
+      "description": "Select skills to back up. Local ones are backed up in full; hub-sourced ones only record their source address.",
+      "notConfigured": "GitHub backup is not configured. Please set the repository URL and token in Settings → GitHub Backup first.",
+      "empty": "No skills found to back up.",
+      "selectAll": "Select all",
+      "deselectAll": "Deselect all",
+      "selectedCount": "{{count}} selected",
+      "tabAll": "All ({{count}})",
+      "tabHub": "From hub ({{count}})",
+      "tabLocal": "Local ({{count}})",
+      "sourceHub": "from hub",
+      "sourceLocal": "local",
+      "backupSelected": "Back up selected ({{count}})",
+      "success": "Backup done: {{total}} total, {{files}} with files, {{recorded}} recorded only.",
+      "failed": "Backup failed"
     },
     "restoreFromBackup": {
       "button": "Restore Backup",

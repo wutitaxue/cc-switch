@@ -20,6 +20,7 @@ import {
   BarChart2,
   Download,
   FolderArchive,
+  Github,
   Search,
   FolderOpen,
   KeyRound,
@@ -1308,6 +1309,17 @@ function App() {
                     >
                       <Download className="w-4 h-4 mr-2" />
                       {t("skills.import")}
+                    </Button>
+                    <Button
+                      variant="ghost"
+                      size="sm"
+                      onClick={() =>
+                        unifiedSkillsPanelRef.current?.openBackupToGithub()
+                      }
+                      className="hover:bg-black/5 dark:hover:bg-white/5"
+                    >
+                      <Github className="w-4 h-4 mr-2" />
+                      {t("skills.backupToGithub.button")}
                     </Button>
                     <Button
                       variant="ghost"

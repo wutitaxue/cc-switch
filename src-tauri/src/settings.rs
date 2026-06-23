@@ -276,6 +276,78 @@ impl S3SyncSettings {
     }
 }
 
+/// GitHub 备份设置（把 cc-switch skill 备份到用户自己的 GitHub 仓库）
+///
+/// 通过本地 git 命令推送：本地维护一个 git 仓（local_dir），origin 指向
+/// 带 token 的远程 URL。token 明文存于本地 settings.json，脱密返回前端。
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct GitHubBackupSettings {
+    #[serde(default)]
+    pub enabled: bool,
+    /// GitHub Personal Access Token（脱密返回前端，保存时空值表示沿用旧值）
+    #[serde(default)]
+    pub token: String,
+    /// 远程仓库 URL，如 https://github.com/owner/repo.git
+    #[serde(default)]
+    pub remote_url: String,
+    /// 推送分支，默认 main
+    #[serde(default = "default_backup_branch")]
+    pub branch: String,
+    /// 本地 git 仓目录（用户自选）
+    #[serde(default)]
+    pub local_dir: String,
+    #[serde(default)]
+    pub status: WebDavSyncStatus,
+}
+
+fn default_backup_branch() -> String {
+    "main".to_string()
+}
+
+impl Default for GitHubBackupSettings {
+    fn default() -> Self {
+        Self {
+            enabled: false,
+            token: String::new(),
+            remote_url: String::new(),
+            branch: default_backup_branch(),
+            local_dir: String::new(),
+            status: WebDavSyncStatus::default(),
+        }
+    }
+}
+
+impl GitHubBackupSettings {
+    pub fn validate(&self) -> Result<(), crate::error::AppError> {
+        if self.local_dir.trim().is_empty() {
+            return Err(crate::error::AppError::localized(
+                "githubBackup.localDir.required",
+                "本地备份目录不能为空",
+                "Local backup directory is required.",
+            ));
+        }
+        if self.remote_url.trim().is_empty() {
+            return Err(crate::error::AppError::localized(
+                "githubBackup.remoteUrl.required",
+                "GitHub 仓库地址不能为空",
+                "GitHub repository URL is required.",
+            ));
+        }
+        Ok(())
+    }
+
+    pub fn normalize(&mut self) {
+        self.token = self.token.trim().to_string();
+        self.remote_url = self.remote_url.trim().to_string();
+        self.branch = self.branch.trim().to_string();
+        self.local_dir = self.local_dir.trim().to_string();
+        if self.branch.is_empty() {
+            self.branch = default_backup_branch();
+        }
+    }
+}
+
 /// 本机自动迁移状态。
 ///
 /// 这里记录的是本机启动时执行过的一次性迁移；标记不随数据库同步。
@@ -455,6 +527,10 @@ pub struct AppSettings {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub s3_sync: Option<S3SyncSettings>,
 
+    // ===== GitHub 备份设置（skill 备份到 GitHub 仓库）=====
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub github_backup: Option<GitHubBackupSettings>,
+
     // ===== WebDAV 备份设置（旧版，保留向后兼容）=====
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub webdav_backup: Option<serde_json::Value>,
@@ -528,6 +604,7 @@ impl Default for AppSettings {
             skill_storage_location: SkillStorageLocation::default(),
             webdav_sync: None,
             s3_sync: None,
+            github_backup: None,
             webdav_backup: None,
             backup_interval_hours: None,
             backup_retain_count: None,
@@ -715,6 +792,9 @@ pub fn get_settings_for_frontend() -> AppSettings {
     }
     if let Some(s3) = &mut settings.s3_sync {
         s3.secret_access_key.clear();
+    }
+    if let Some(gh) = &mut settings.github_backup {
+        gh.token.clear();
     }
     settings.webdav_backup = None;
     settings
@@ -1104,6 +1184,27 @@ pub fn update_s3_sync_status(status: WebDavSyncStatus) -> Result<(), AppError> {
     mutate_settings(|current| {
         if let Some(s3) = current.s3_sync.as_mut() {
             s3.status = status;
+        }
+    })
+}
+
+// ===== GitHub 备份设置管理函数 =====
+
+pub fn get_github_backup_settings() -> Option<GitHubBackupSettings> {
+    settings_store().read().ok()?.github_backup.clone()
+}
+
+pub fn set_github_backup_settings(settings: Option<GitHubBackupSettings>) -> Result<(), AppError> {
+    mutate_settings(|current| {
+        current.github_backup = settings;
+    })
+}
+
+/// 仅更新 GitHub 备份状态，避免覆写 token/remote_url/local_dir 等字段
+pub fn update_github_backup_status(status: WebDavSyncStatus) -> Result<(), AppError> {
+    mutate_settings(|current| {
+        if let Some(gh) = current.github_backup.as_mut() {
+            gh.status = status;
         }
     })
 }

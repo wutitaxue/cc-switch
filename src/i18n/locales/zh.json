@@ -446,6 +446,20 @@
     "configExported": "配置已导出到：",
     "exportFailed": "导出失败",
     "selectFileFailed": "请选择有效的 SQL 备份文件",
+    "githubBackup": {
+      "title": "GitHub 备份",
+      "description": "把 skill 备份到你自己的 GitHub 仓库",
+      "enable": "启用 GitHub 备份",
+      "enableHint": "把 skill 备份到你自己的 GitHub 仓库",
+      "localDir": "本地仓库目录",
+      "remoteUrl": "远程仓库 URL",
+      "branch": "分支",
+      "token": "GitHub Token (PAT)",
+      "tokenSaved": "（已保存，留空则沿用）",
+      "tokenHint": "Token 会拼进远程 URL 用于推送，仅存于本地。",
+      "browse": "选择目录",
+      "saved": "已保存"
+    },
     "configCorrupted": "SQL 文件可能已损坏或格式不正确",
     "backupId": "备份ID",
     "backupManager": {
@@ -2192,6 +2206,24 @@
     "notFound": "未找到技能",
     "backup": {
       "location": "备份位置: {{path}}"
+    },
+    "backupToGithub": {
+      "button": "备份到 GitHub",
+      "title": "备份 Skill 到 GitHub",
+      "description": "勾选要备份的 skill。自有的会完整备份文件，来自 hub 的只记录来源地址。",
+      "notConfigured": "尚未配置 GitHub 备份，请先在设置 → GitHub 备份中填写仓库地址与 Token。",
+      "empty": "未发现可备份的 skill。",
+      "selectAll": "全选",
+      "deselectAll": "取消全选",
+      "selectedCount": "已选 {{count}} 个",
+      "tabAll": "全部 ({{count}})",
+      "tabHub": "来自 hub ({{count}})",
+      "tabLocal": "自有 ({{count}})",
+      "sourceHub": "来自 hub",
+      "sourceLocal": "自有",
+      "backupSelected": "备份已选 ({{count}})",
+      "success": "备份完成：共 {{total}} 个，文件 {{files}} 个，仅记录地址 {{recorded}} 个。",
+      "failed": "备份失败"
     },
     "restoreFromBackup": {
       "button": "从备份中恢复",

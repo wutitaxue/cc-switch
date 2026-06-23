@@ -334,3 +334,51 @@ pub fn install_skills_from_zip(
 
     SkillService::install_from_zip(&app_state.db, path, &app_type).map_err(|e| e.to_string())
 }
+
+// ========== GitHub 备份命令 ==========
+
+/// 扫描所有位置的 skill，供前端勾选备份
+#[tauri::command]
+pub fn scan_skill_backup_candidates(
+    app_state: State<'_, AppState>,
+) -> Result<Vec<crate::services::skill::BackupCandidate>, String> {
+    SkillService::scan_backup_candidates(&app_state.db).map_err(|e| e.to_string())
+}
+
+/// 把选中的 skill 备份到 GitHub
+#[tauri::command]
+pub async fn backup_skills_to_github(
+    selected: Vec<String>,
+    app_state: State<'_, AppState>,
+) -> Result<crate::services::skill::BackupResult, String> {
+    SkillService::backup_to_github(&app_state.db, selected)
+        .await
+        .map_err(|e| e.to_string())
+}
+
+/// 保存 GitHub 备份设置（token 为空且未 touched 时沿用旧值）
+#[tauri::command]
+pub fn github_backup_save_settings(
+    settings: crate::settings::GitHubBackupSettings,
+    #[allow(non_snake_case)] tokenTouched: Option<bool>,
+) -> Result<serde_json::Value, String> {
+    let token_touched = tokenTouched.unwrap_or(false);
+    let existing = crate::settings::get_github_backup_settings();
+
+    let mut next = settings;
+    // 沿用旧 token：未 touched 且传入为空
+    if !token_touched && next.token.is_empty() {
+        if let Some(prev) = &existing {
+            next.token = prev.token.clone();
+        }
+    }
+    // 保留后端维护的状态字段
+    if let Some(prev) = existing {
+        next.status = prev.status;
+    }
+
+    next.normalize();
+    next.validate().map_err(|e| e.to_string())?;
+    crate::settings::set_github_backup_settings(Some(next)).map_err(|e| e.to_string())?;
+    Ok(serde_json::json!({ "success": true }))
+}

@@ -131,6 +131,31 @@ export interface SkillRepo {
   enabled: boolean;
 }
 
+/** GitHub 备份候选 skill（扫描所有位置后供勾选） */
+export interface BackupCandidate {
+  directory: string;
+  name: string;
+  description?: string;
+  foundIn: string[];
+  path: string;
+  /** "hub"（有 GitHub 来源）或 "local"（自有/辨不出来源） */
+  sourceType: "hub" | "local";
+  repoOwner?: string;
+  repoName?: string;
+  repoBranch?: string;
+  skillPath?: string;
+  readmeUrl?: string;
+}
+
+/** 备份结果 */
+export interface BackupResult {
+  total: number;
+  backedUpFiles: number;
+  recordedOnly: number;
+  missing: number;
+  commit: string;
+}
+
 // ========== API ==========
 
 export const skillsApi = {
@@ -279,5 +304,17 @@ export const skillsApi = {
     currentApp: AppId,
   ): Promise<InstalledSkill[]> {
     return await invoke("install_skills_from_zip", { filePath, currentApp });
+  },
+
+  // ========== GitHub 备份 ==========
+
+  /** 扫描所有位置的 skill，供勾选备份 */
+  async scanBackupCandidates(): Promise<BackupCandidate[]> {
+    return await invoke("scan_skill_backup_candidates");
+  },
+
+  /** 把选中的 skill 备份到 GitHub */
+  async backupToGithub(selected: string[]): Promise<BackupResult> {
+    return await invoke("backup_skills_to_github", { selected });
   },
 };

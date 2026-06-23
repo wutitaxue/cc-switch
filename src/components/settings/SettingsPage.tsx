@@ -13,6 +13,7 @@ import {
   FolderSearch,
   Database,
   Cloud,
+  Github,
   ScrollText,
   HardDriveDownload,
   FlaskConical,
@@ -45,6 +46,7 @@ import { DirectorySettings } from "@/components/settings/DirectorySettings";
 import { ImportExportSection } from "@/components/settings/ImportExportSection";
 import { BackupListSection } from "@/components/settings/BackupListSection";
 import { WebdavSyncSection } from "@/components/settings/WebdavSyncSection";
+import { GithubBackupSection } from "@/components/settings/GithubBackupSection";
 import { AboutSection } from "@/components/settings/AboutSection";
 import { ProxyTabContent } from "@/components/settings/ProxyTabContent";
 import { ModelTestConfigPanel } from "@/components/usage/ModelTestConfigPanel";
@@ -450,6 +452,35 @@ export function SettingsPage({
                             s3Config={settings?.s3Sync}
                             settings={settings}
                             onAutoSave={handleAutoSave}
+                          />
+                        </AccordionContent>
+                      </AccordionItem>
+
+                      <AccordionItem
+                        value="githubBackup"
+                        className="rounded-xl glass-card overflow-hidden"
+                      >
+                        <AccordionTrigger className="px-6 py-4 hover:no-underline hover:bg-muted/50 data-[state=open]:bg-muted/50">
+                          <div className="flex items-center gap-3">
+                            <Github className="h-5 w-5 text-foreground" />
+                            <div className="text-left">
+                              <h3 className="text-base font-semibold">
+                                {t("settings.githubBackup.title", {
+                                  defaultValue: "GitHub 备份",
+                                })}
+                              </h3>
+                              <p className="text-sm text-muted-foreground font-normal">
+                                {t("settings.githubBackup.description", {
+                                  defaultValue:
+                                    "把 skill 备份到你自己的 GitHub 仓库",
+                                })}
+                              </p>
+                            </div>
+                          </div>
+                        </AccordionTrigger>
+                        <AccordionContent className="px-6 pb-6 pt-4 border-t border-border/50">
+                          <GithubBackupSection
+                            config={settings?.githubBackup}
                           />
                         </AccordionContent>
                       </AccordionItem>

@@ -24,8 +24,11 @@ import {
   useInstallSkillsFromZip,
   useCheckSkillUpdates,
   useUpdateSkill,
+  useScanBackupCandidates,
+  useBackupToGithub,
   type InstalledSkill,
   type SkillUpdateInfo,
+  type BackupCandidate,
 } from "@/hooks/useSkills";
 import type { AppId } from "@/lib/api/types";
 import { ConfirmDialog } from "@/components/ConfirmDialog";
@@ -43,6 +46,7 @@ import {
   DialogHeader,
   DialogTitle,
 } from "@/components/ui/dialog";
+import { Tabs, TabsList, TabsTrigger, TabsContent } from "@/components/ui/tabs";
 
 interface UnifiedSkillsPanelProps {
   onOpenDiscovery: () => void;
@@ -54,6 +58,7 @@ export interface UnifiedSkillsPanelHandle {
   openImport: () => void;
   openInstallFromZip: () => void;
   openRestoreFromBackup: () => void;
+  openBackupToGithub: () => void;
   checkUpdates: () => void;
 }
 
@@ -79,6 +84,7 @@ const UnifiedSkillsPanel = React.forwardRef<
   } | null>(null);
   const [importDialogOpen, setImportDialogOpen] = useState(false);
   const [restoreDialogOpen, setRestoreDialogOpen] = useState(false);
+  const [backupDialogOpen, setBackupDialogOpen] = useState(false);
 
   const { data: skills, isLoading } = useInstalledSkills();
   const {
@@ -94,6 +100,9 @@ const UnifiedSkillsPanel = React.forwardRef<
     useScanUnmanagedSkills();
   const importMutation = useImportSkillsFromApps();
   const installFromZipMutation = useInstallSkillsFromZip();
+  const { data: backupCandidates, refetch: scanBackupCandidates } =
+    useScanBackupCandidates();
+  const backupToGithubMutation = useBackupToGithub();
   const {
     data: skillUpdates,
     refetch: checkUpdates,
@@ -192,6 +201,47 @@ const UnifiedSkillsPanel = React.forwardRef<
       });
     } catch (error) {
       toast.error(t("common.error"), { description: String(error) });
+    }
+  };
+
+  const handleOpenBackupToGithub = async () => {
+    try {
+      // 先校验是否已配置 GitHub 备份
+      const settings = await settingsApi.get();
+      const gh = settings.githubBackup;
+      if (!gh || !gh.localDir || !gh.remoteUrl) {
+        toast.error(t("skills.backupToGithub.notConfigured"), {
+          closeButton: true,
+        });
+        return;
+      }
+      const result = await scanBackupCandidates();
+      if (!result.data || result.data.length === 0) {
+        toast.info(t("skills.backupToGithub.empty"), { closeButton: true });
+        return;
+      }
+      setBackupDialogOpen(true);
+    } catch (error) {
+      toast.error(t("common.error"), { description: String(error) });
+    }
+  };
+
+  const handleBackupToGithub = async (selected: string[]) => {
+    try {
+      const result = await backupToGithubMutation.mutateAsync(selected);
+      setBackupDialogOpen(false);
+      toast.success(
+        t("skills.backupToGithub.success", {
+          total: result.total,
+          files: result.backedUpFiles,
+          recorded: result.recordedOnly,
+        }),
+        { closeButton: true },
+      );
+    } catch (error) {
+      toast.error(t("skills.backupToGithub.failed"), {
+        description: String(error),
+      });
     }
   };
 
@@ -341,6 +391,7 @@ const UnifiedSkillsPanel = React.forwardRef<
     openImport: handleOpenImport,
     openInstallFromZip: handleInstallFromZip,
     openRestoreFromBackup: handleOpenRestoreFromBackup,
+    openBackupToGithub: handleOpenBackupToGithub,
     checkUpdates: handleCheckUpdates,
   }));
 
@@ -458,6 +509,15 @@ const UnifiedSkillsPanel = React.forwardRef<
           isImporting={importMutation.isPending}
           onImport={handleImport}
           onClose={() => setImportDialogOpen(false)}
+        />
+      )}
+
+      {backupDialogOpen && backupCandidates && (
+        <BackupSkillsDialog
+          skills={backupCandidates}
+          isBackingUp={backupToGithubMutation.isPending}
+          onBackup={handleBackupToGithub}
+          onClose={() => setBackupDialogOpen(false)}
         />
       )}
 
@@ -858,6 +918,203 @@ const ImportSkillsDialog: React.FC<ImportSkillsDialogProps> = ({
               disabled={selected.size === 0 || isImporting}
             >
               {t("skills.importSelected", { count: selected.size })}
+            </Button>
+          </div>
+        </div>
+      </div>
+    </TooltipProvider>
+  );
+};
+
+interface BackupSkillsDialogProps {
+  skills: BackupCandidate[];
+  isBackingUp: boolean;
+  onBackup: (selected: string[]) => void;
+  onClose: () => void;
+}
+
+const BackupSkillsDialog: React.FC<BackupSkillsDialogProps> = ({
+  skills,
+  isBackingUp,
+  onBackup,
+  onClose,
+}) => {
+  const { t } = useTranslation();
+  const [selected, setSelected] = useState<Set<string>>(
+    () => new Set(skills.map((s) => s.directory)),
+  );
+  const [tab, setTab] = useState<"all" | "hub" | "local">("all");
+
+  const hubSkills = useMemo(
+    () => skills.filter((s) => s.sourceType === "hub"),
+    [skills],
+  );
+  const localSkills = useMemo(
+    () => skills.filter((s) => s.sourceType !== "hub"),
+    [skills],
+  );
+
+  const visibleSkills = useMemo(() => {
+    if (tab === "hub") return hubSkills;
+    if (tab === "local") return localSkills;
+    return skills;
+  }, [tab, skills, hubSkills, localSkills]);
+
+  const toggleSelect = (directory: string) => {
+    setSelected((prev) => {
+      const next = new Set(prev);
+      if (next.has(directory)) {
+        next.delete(directory);
+      } else {
+        next.add(directory);
+      }
+      return next;
+    });
+  };
+
+  // 全选/取消只作用于当前 tab 可见项
+  const allVisibleSelected =
+    visibleSkills.length > 0 &&
+    visibleSkills.every((s) => selected.has(s.directory));
+  const toggleAllVisible = () => {
+    setSelected((prev) => {
+      const next = new Set(prev);
+      if (allVisibleSelected) {
+        visibleSkills.forEach((s) => next.delete(s.directory));
+      } else {
+        visibleSkills.forEach((s) => next.add(s.directory));
+      }
+      return next;
+    });
+  };
+
+  const renderSkill = (skill: BackupCandidate) => {
+    const isHub = skill.sourceType === "hub";
+    const sourceLabel =
+      isHub && skill.repoOwner && skill.repoName
+        ? `${skill.repoOwner}/${skill.repoName}`
+        : t("skills.local");
+    return (
+      <div
+        key={skill.directory}
+        className="flex items-start gap-3 p-3 rounded-lg border hover:bg-muted"
+      >
+        <input
+          type="checkbox"
+          checked={selected.has(skill.directory)}
+          onChange={() => toggleSelect(skill.directory)}
+          className="mt-1"
+        />
+        <div className="flex-1 min-w-0">
+          <div className="flex items-center gap-1.5">
+            <span className="font-medium truncate">{skill.name}</span>
+            <Badge
+              variant="outline"
+              className="shrink-0 text-[10px] px-1.5 py-0 h-4"
+            >
+              {isHub
+                ? t("skills.backupToGithub.sourceHub")
+                : t("skills.backupToGithub.sourceLocal")}
+            </Badge>
+            <span className="text-xs text-muted-foreground/50 truncate">
+              {sourceLabel}
+            </span>
+          </div>
+          {skill.description && (
+            <div className="text-sm text-muted-foreground line-clamp-1">
+              {skill.description}
+            </div>
+          )}
+          <div
+            className="text-xs text-muted-foreground/50 mt-1 truncate"
+            title={skill.path}
+          >
+            {skill.path}
+          </div>
+        </div>
+      </div>
+    );
+  };
+
+  return (
+    <TooltipProvider delayDuration={300}>
+      <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50">
+        <div className="bg-background rounded-xl p-6 max-w-lg w-full mx-4 shadow-xl max-h-[80vh] flex flex-col">
+          <h2 className="text-lg font-semibold mb-2">
+            {t("skills.backupToGithub.title")}
+          </h2>
+          <p className="text-sm text-muted-foreground mb-4">
+            {t("skills.backupToGithub.description")}
+          </p>
+
+          <Tabs
+            value={tab}
+            onValueChange={(v) => setTab(v as "all" | "hub" | "local")}
+            className="flex flex-col flex-1 min-h-0"
+          >
+            <TabsList className="grid w-full grid-cols-3 mb-3">
+              <TabsTrigger value="all">
+                {t("skills.backupToGithub.tabAll", { count: skills.length })}
+              </TabsTrigger>
+              <TabsTrigger value="hub">
+                {t("skills.backupToGithub.tabHub", { count: hubSkills.length })}
+              </TabsTrigger>
+              <TabsTrigger value="local">
+                {t("skills.backupToGithub.tabLocal", {
+                  count: localSkills.length,
+                })}
+              </TabsTrigger>
+            </TabsList>
+
+            <div className="flex items-center justify-between mb-2">
+              <button
+                type="button"
+                onClick={toggleAllVisible}
+                disabled={visibleSkills.length === 0}
+                className="text-xs text-muted-foreground hover:text-foreground disabled:opacity-40"
+              >
+                {allVisibleSelected
+                  ? t("skills.backupToGithub.deselectAll")
+                  : t("skills.backupToGithub.selectAll")}
+              </button>
+              <span className="text-xs text-muted-foreground/60">
+                {t("skills.backupToGithub.selectedCount", {
+                  count: selected.size,
+                })}
+              </span>
+            </div>
+
+            {(["all", "hub", "local"] as const).map((key) => (
+              <TabsContent
+                key={key}
+                value={key}
+                className="flex-1 overflow-y-auto space-y-2 mb-4 mt-0"
+              >
+                {visibleSkills.length === 0 ? (
+                  <div className="py-10 text-center text-sm text-muted-foreground">
+                    {t("skills.backupToGithub.empty")}
+                  </div>
+                ) : (
+                  visibleSkills.map(renderSkill)
+                )}
+              </TabsContent>
+            ))}
+          </Tabs>
+
+          <div className="flex justify-end gap-3">
+            <Button variant="outline" onClick={onClose} disabled={isBackingUp}>
+              {t("common.cancel")}
+            </Button>
+            <Button
+              onClick={() => onBackup(Array.from(selected))}
+              disabled={selected.size === 0 || isBackingUp}
+            >
+              {isBackingUp ? (
+                <Loader2 size={14} className="animate-spin mr-1.5" />
+              ) : null}
+              {t("skills.backupToGithub.backupSelected", {
+                count: selected.size,
+              })}
             </Button>
           </div>
         </div>

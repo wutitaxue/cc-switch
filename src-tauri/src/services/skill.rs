@@ -264,6 +264,89 @@ struct SkillBackupMetadata {
     source_path: String,
 }
 
+/// GitHub 备份候选 skill（扫描所有位置后供前端勾选）
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct BackupCandidate {
+    /// 目录名（备份/manifest 的唯一键）
+    pub directory: String,
+    /// 显示名称（从 SKILL.md 解析）
+    pub name: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub description: Option<String>,
+    /// 在哪些位置发现（claude/codex/agents/cc-switch...）
+    pub found_in: Vec<String>,
+    /// 首个匹配的完整路径
+    pub path: String,
+    /// 来源类型："hub"（有 GitHub 来源）或 "local"（自有/辨不出来源）
+    pub source_type: String,
+    /// hub 来源仓库 owner（local 时为空）
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub repo_owner: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub repo_name: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub repo_branch: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub skill_path: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub readme_url: Option<String>,
+}
+
+/// 写入备份仓 manifest.json 的单条 skill 记录
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct BackupManifestSkill {
+    directory: String,
+    name: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    description: Option<String>,
+    /// "hub" 或 "local"
+    #[serde(rename = "type")]
+    kind: String,
+    /// 是否在备份仓里包含了文件（仅 local 为 true）
+    has_files: bool,
+    found_in: Vec<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    repo_owner: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    repo_name: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    repo_branch: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    skill_path: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    readme_url: Option<String>,
+    /// 自有 skill 找不到源目录时标记 true（记入 manifest 但无文件）
+    #[serde(skip_serializing_if = "std::ops::Not::not")]
+    missing: bool,
+}
+
+/// 备份仓 manifest.json 顶层结构
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct BackupManifest {
+    version: u32,
+    backed_up_at: i64,
+    skills: Vec<BackupManifestSkill>,
+}
+
+/// 备份结果（返回前端）
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct BackupResult {
+    /// 备份的 skill 总数
+    pub total: usize,
+    /// 完整备份文件的 skill 数（local）
+    pub backed_up_files: usize,
+    /// 仅记录地址的 skill 数（hub）
+    pub recorded_only: usize,
+    /// 找不到源目录的 skill 数
+    pub missing: usize,
+    /// git commit 短哈希（无变更提交时为空）
+    pub commit: String,
+}
+
 const SKILL_BACKUP_RETAIN_COUNT: usize = 20;
 
 /// 技能元数据 (从 SKILL.md 解析)
@@ -2855,6 +2938,495 @@ impl SkillService {
             query: resp.query,
         })
     }
+
+    // ========== GitHub 备份 ==========
+
+    /// 扫描所有位置的 skill，供前端勾选备份。
+    ///
+    /// 与 `scan_unmanaged` 不同：不排除已被 cc-switch 管理的 skill（备份要含全部）。
+    /// 对每个候选判定来源（hub / local），判定规则见模块内文档。
+    pub fn scan_backup_candidates(db: &Arc<Database>) -> Result<Vec<BackupCandidate>> {
+        // 数据库中已管理的 skill：directory -> InstalledSkill（用于来源判定）
+        let managed = db.get_all_installed_skills()?;
+        let managed_by_dir: HashMap<String, InstalledSkill> = managed
+            .into_values()
+            .map(|s| (s.directory.clone(), s))
+            .collect();
+        // agents lock：skill 名 -> 仓库信息（次级来源判定）
+        let lock = parse_agents_lock();
+
+        // 收集待扫描目录及来源标签（与 scan_unmanaged 一致）
+        let mut scan_sources: Vec<(PathBuf, String)> = Vec::new();
+        for app in AppType::all() {
+            if let Ok(d) = Self::get_app_skills_dir(&app) {
+                scan_sources.push((d, app.as_str().to_string()));
+            }
+        }
+        if let Some(agents_dir) = get_agents_skills_dir() {
+            scan_sources.push((agents_dir, "agents".to_string()));
+        }
+        if let Ok(ssot_dir) = Self::get_ssot_dir() {
+            scan_sources.push((ssot_dir, "cc-switch".to_string()));
+        }
+
+        let mut candidates: HashMap<String, BackupCandidate> = HashMap::new();
+
+        for (scan_dir, label) in &scan_sources {
+            let entries = match fs::read_dir(scan_dir) {
+                Ok(e) => e,
+                Err(_) => continue,
+            };
+            for entry in entries.flatten() {
+                let path = entry.path();
+                if !path.is_dir() {
+                    continue;
+                }
+                let dir_name = entry.file_name().to_string_lossy().to_string();
+                if dir_name.starts_with('.') {
+                    continue;
+                }
+                let skill_md = path.join("SKILL.md");
+                if !skill_md.exists() {
+                    continue;
+                }
+
+                if let Some(existing) = candidates.get_mut(&dir_name) {
+                    if !existing.found_in.contains(label) {
+                        existing.found_in.push(label.clone());
+                    }
+                    continue;
+                }
+
+                let (name, description) = Self::read_skill_name_desc(&skill_md, &dir_name);
+                let candidate = Self::build_backup_candidate(
+                    &dir_name,
+                    name,
+                    description,
+                    &path,
+                    label,
+                    &managed_by_dir,
+                    &lock,
+                );
+                candidates.insert(dir_name, candidate);
+            }
+        }
+
+        Ok(candidates.into_values().collect())
+    }
+
+    /// 来源判定：先查数据库 repo 字段，再查 agents lock，都没有则当作 local。
+    #[allow(clippy::too_many_arguments)]
+    fn build_backup_candidate(
+        directory: &str,
+        name: String,
+        description: Option<String>,
+        path: &Path,
+        label: &str,
+        managed_by_dir: &HashMap<String, InstalledSkill>,
+        lock: &HashMap<String, LockRepoInfo>,
+    ) -> BackupCandidate {
+        // 1. 数据库里有 repo_owner + repo_name → hub
+        if let Some(skill) = managed_by_dir.get(directory) {
+            if let (Some(owner), Some(repo)) = (&skill.repo_owner, &skill.repo_name) {
+                return BackupCandidate {
+                    directory: directory.to_string(),
+                    name,
+                    description,
+                    found_in: vec![label.to_string()],
+                    path: path.display().to_string(),
+                    source_type: "hub".to_string(),
+                    repo_owner: Some(owner.clone()),
+                    repo_name: Some(repo.clone()),
+                    repo_branch: skill.repo_branch.clone(),
+                    skill_path: None,
+                    readme_url: skill.readme_url.clone(),
+                };
+            }
+        }
+        // 2. agents lock 里有来源 → hub
+        if let Some(info) = lock.get(directory) {
+            return BackupCandidate {
+                directory: directory.to_string(),
+                name,
+                description,
+                found_in: vec![label.to_string()],
+                path: path.display().to_string(),
+                source_type: "hub".to_string(),
+                repo_owner: Some(info.owner.clone()),
+                repo_name: Some(info.repo.clone()),
+                repo_branch: info.branch.clone(),
+                skill_path: info.skill_path.clone(),
+                readme_url: None,
+            };
+        }
+        // 3. 辨不出来源 → local（保险，完整备份文件）
+        BackupCandidate {
+            directory: directory.to_string(),
+            name,
+            description,
+            found_in: vec![label.to_string()],
+            path: path.display().to_string(),
+            source_type: "local".to_string(),
+            repo_owner: None,
+            repo_name: None,
+            repo_branch: None,
+            skill_path: None,
+            readme_url: None,
+        }
+    }
+
+    /// 把选中的 skill 备份到 GitHub：local 类型拷文件，hub 类型仅记地址，
+    /// 然后 git add/commit/push。
+    pub async fn backup_to_github(
+        db: &Arc<Database>,
+        selected_dirs: Vec<String>,
+    ) -> Result<BackupResult> {
+        if selected_dirs.is_empty() {
+            return Err(anyhow!(format_skill_error("backupNoSelection", &[], None,)));
+        }
+
+        // 读取并校验设置
+        let settings = crate::settings::get_github_backup_settings().ok_or_else(|| {
+            anyhow!(crate::error::AppError::localized(
+                "githubBackup.notConfigured",
+                "尚未配置 GitHub 备份，请先在设置中填写仓库地址与 Token",
+                "GitHub backup is not configured. Please set the repository URL and token in Settings first.",
+            ))
+        })?;
+        settings.validate().map_err(|e| anyhow!(e))?;
+        if settings.token.trim().is_empty() {
+            return Err(anyhow!(crate::error::AppError::localized(
+                "githubBackup.tokenRequired",
+                "GitHub Token 不能为空",
+                "GitHub token is required.",
+            )));
+        }
+
+        // 检测 git 可用
+        Self::ensure_git_available().await?;
+
+        // 在选中集合上构建来源信息（复用扫描结果，避免再次磁盘遍历不一致）
+        let candidates = Self::scan_backup_candidates(db)?;
+        let selected: HashSet<String> = selected_dirs.into_iter().collect();
+        let chosen: Vec<BackupCandidate> = candidates
+            .into_iter()
+            .filter(|c| selected.contains(&c.directory))
+            .collect();
+
+        let local_dir = PathBuf::from(&settings.local_dir);
+        let branch = settings.branch.clone();
+
+        // 准备本地仓与 skills 目录
+        fs::create_dir_all(&local_dir)
+            .map_err(|e| anyhow!(crate::error::AppError::io(&local_dir, e)))?;
+        Self::ensure_git_repo(&local_dir, &settings.remote_url, &settings.token, &branch).await?;
+
+        let skills_dir = local_dir.join("skills");
+        if skills_dir.exists() {
+            fs::remove_dir_all(&skills_dir)
+                .map_err(|e| anyhow!(crate::error::AppError::io(&skills_dir, e)))?;
+        }
+        fs::create_dir_all(&skills_dir)
+            .map_err(|e| anyhow!(crate::error::AppError::io(&skills_dir, e)))?;
+
+        let mut manifest_skills = Vec::with_capacity(chosen.len());
+        let mut backed_up_files = 0usize;
+        let mut recorded_only = 0usize;
+        let mut missing = 0usize;
+
+        for c in &chosen {
+            let is_hub = c.source_type == "hub";
+            let mut has_files = false;
+            let mut is_missing = false;
+
+            if is_hub {
+                recorded_only += 1;
+            } else {
+                // local：拷贝整个目录
+                let src = PathBuf::from(&c.path);
+                if src.is_dir() {
+                    let dest = skills_dir.join(&c.directory);
+                    Self::copy_dir_recursive(&src, &dest)?;
+                    has_files = true;
+                    backed_up_files += 1;
+                } else {
+                    is_missing = true;
+                    missing += 1;
+                }
+            }
+
+            manifest_skills.push(BackupManifestSkill {
+                directory: c.directory.clone(),
+                name: c.name.clone(),
+                description: c.description.clone(),
+                kind: c.source_type.clone(),
+                has_files,
+                found_in: c.found_in.clone(),
+                repo_owner: c.repo_owner.clone(),
+                repo_name: c.repo_name.clone(),
+                repo_branch: c.repo_branch.clone(),
+                skill_path: c.skill_path.clone(),
+                readme_url: c.readme_url.clone(),
+                missing: is_missing,
+            });
+        }
+
+        let now = Utc::now().timestamp();
+        let manifest = BackupManifest {
+            version: 1,
+            backed_up_at: now,
+            skills: manifest_skills,
+        };
+        let manifest_json = serde_json::to_string_pretty(&manifest)
+            .map_err(|e| anyhow!("序列化 manifest 失败 (failed to serialize manifest): {e}"))?;
+        let manifest_path = local_dir.join("manifest.json");
+        fs::write(&manifest_path, manifest_json)
+            .map_err(|e| anyhow!(crate::error::AppError::io(&manifest_path, e)))?;
+
+        // git add / commit / push
+        let commit = Self::git_commit_and_push(&local_dir, &branch, now).await?;
+
+        // 更新状态（成功）
+        let status = crate::settings::WebDavSyncStatus {
+            last_sync_at: Some(now),
+            last_error: None,
+            ..Default::default()
+        };
+        if let Err(e) = crate::settings::update_github_backup_status(status) {
+            log::warn!("更新 GitHub 备份状态失败: {e}");
+        }
+
+        Ok(BackupResult {
+            total: chosen.len(),
+            backed_up_files,
+            recorded_only,
+            missing,
+            commit,
+        })
+    }
+
+    /// 检测系统 git 是否可用（`git --version`）
+    async fn ensure_git_available() -> Result<()> {
+        let output = tokio::task::spawn_blocking(|| {
+            std::process::Command::new("git").arg("--version").output()
+        })
+        .await
+        .map_err(|e| anyhow!("git 检测任务失败 (git probe task failed): {e}"))?;
+
+        match output {
+            Ok(o) if o.status.success() => Ok(()),
+            _ => Err(anyhow!(crate::error::AppError::localized(
+                "githubBackup.gitNotFound",
+                "未检测到 git 命令，请先安装 git 后再备份",
+                "git command not found. Please install git before backing up.",
+            ))),
+        }
+    }
+
+    /// 确保 local_dir 是 git 仓且 origin 指向带 token 的远程 URL，并准备好分支。
+    async fn ensure_git_repo(
+        local_dir: &Path,
+        remote_url: &str,
+        token: &str,
+        branch: &str,
+    ) -> Result<()> {
+        let authed_url = Self::build_authed_remote(remote_url, token);
+        let dir = local_dir.to_path_buf();
+        let branch = branch.to_string();
+
+        let result = tokio::task::spawn_blocking(move || -> Result<(), String> {
+            let run = |args: &[&str]| -> Result<std::process::Output, String> {
+                std::process::Command::new("git")
+                    .args(args)
+                    .current_dir(&dir)
+                    .output()
+                    .map_err(|e| format!("git {:?} 启动失败: {e}", args))
+            };
+
+            // 初始化（已是 git 仓时无副作用）
+            let is_repo = dir.join(".git").exists();
+            if !is_repo {
+                let o = run(&["init"])?;
+                if !o.status.success() {
+                    return Err(format!(
+                        "git init 失败: {}",
+                        String::from_utf8_lossy(&o.stderr)
+                    ));
+                }
+            }
+            // 确保 .gitignore 含常见系统垃圾文件（如 .DS_Store），避免误备份。
+            // 不存在则创建；已存在但缺条目则补齐，不覆盖用户已有内容。
+            {
+                let gitignore_path = dir.join(".gitignore");
+                let required = [".DS_Store", "Thumbs.db", "desktop.ini"];
+                let existing = fs::read_to_string(&gitignore_path).unwrap_or_default();
+                let mut lines: Vec<String> = existing.lines().map(|l| l.to_string()).collect();
+                let mut changed = false;
+                for entry in required {
+                    if !lines.iter().any(|l| l.trim() == entry) {
+                        lines.push(entry.to_string());
+                        changed = true;
+                    }
+                }
+                if changed {
+                    let mut content = lines.join("\n");
+                    content.push('\n');
+                    if let Err(e) = fs::write(&gitignore_path, content) {
+                        return Err(format!("写入 .gitignore 失败: {e}"));
+                    }
+                }
+            }
+            // 设置/更新 origin
+            let has_origin = run(&["remote", "get-url", "origin"])
+                .map(|o| o.status.success())
+                .unwrap_or(false);
+            let remote_args: Vec<&str> = if has_origin {
+                vec!["remote", "set-url", "origin", &authed_url]
+            } else {
+                vec!["remote", "add", "origin", &authed_url]
+            };
+            let o = run(&remote_args)?;
+            if !o.status.success() {
+                return Err(format!(
+                    "配置 origin 失败: {}",
+                    String::from_utf8_lossy(&o.stderr)
+                ));
+            }
+            // 确保在目标分支上（已存在则切换，否则新建）
+            let checkout = run(&["checkout", "-B", &branch])?;
+            if !checkout.status.success() {
+                return Err(format!(
+                    "切换分支 {branch} 失败: {}",
+                    String::from_utf8_lossy(&checkout.stderr)
+                ));
+            }
+            Ok(())
+        })
+        .await
+        .map_err(|e| anyhow!("git 仓初始化任务失败 (git repo init task failed): {e}"))?;
+
+        result.map_err(|msg| {
+            anyhow!(crate::error::AppError::localized(
+                "githubBackup.repoInitFailed",
+                format!("初始化本地 git 仓失败：{}", Self::redact_token(&msg)),
+                format!(
+                    "Failed to init local git repo: {}",
+                    Self::redact_token(&msg)
+                ),
+            ))
+        })
+    }
+
+    /// git add -A → commit → push，返回 commit 短哈希（无变更时为空字符串）。
+    async fn git_commit_and_push(local_dir: &Path, branch: &str, ts: i64) -> Result<String> {
+        let dir = local_dir.to_path_buf();
+        let branch = branch.to_string();
+        let msg = format!("cc-switch skill backup {ts}");
+
+        let result = tokio::task::spawn_blocking(move || -> Result<String, String> {
+            let run = |args: &[&str]| -> Result<std::process::Output, String> {
+                std::process::Command::new("git")
+                    .args(args)
+                    .current_dir(&dir)
+                    .output()
+                    .map_err(|e| format!("git {:?} 启动失败: {e}", args))
+            };
+
+            let add = run(&["add", "-A"])?;
+            if !add.status.success() {
+                return Err(format!(
+                    "git add 失败: {}",
+                    String::from_utf8_lossy(&add.stderr)
+                ));
+            }
+
+            let commit = run(&["commit", "-m", &msg])?;
+            if !commit.status.success() {
+                let stderr = String::from_utf8_lossy(&commit.stderr);
+                let stdout = String::from_utf8_lossy(&commit.stdout);
+                // 无变更不算错误
+                if !stderr.contains("nothing to commit") && !stdout.contains("nothing to commit") {
+                    return Err(format!("git commit 失败: {stderr}{stdout}"));
+                }
+            }
+
+            // push（带超时由外层控制）
+            let push = run(&["push", "-u", "origin", &branch])?;
+            if !push.status.success() {
+                return Err(format!(
+                    "git push 失败: {}",
+                    String::from_utf8_lossy(&push.stderr)
+                ));
+            }
+
+            // 取短哈希
+            let rev = run(&["rev-parse", "--short", "HEAD"])?;
+            let hash = if rev.status.success() {
+                String::from_utf8_lossy(&rev.stdout).trim().to_string()
+            } else {
+                String::new()
+            };
+            Ok(hash)
+        });
+
+        let joined = timeout(std::time::Duration::from_secs(120), result)
+            .await
+            .map_err(|_| {
+                anyhow!(crate::error::AppError::localized(
+                    "githubBackup.pushTimeout",
+                    "git push 超时，请检查网络",
+                    "git push timed out. Please check your network.",
+                ))
+            })?
+            .map_err(|e| anyhow!("git 备份任务失败 (git backup task failed): {e}"))?;
+
+        joined.map_err(|msg| {
+            anyhow!(crate::error::AppError::localized(
+                "githubBackup.pushFailed",
+                format!("备份推送失败：{}", Self::redact_token(&msg)),
+                format!("Backup push failed: {}", Self::redact_token(&msg)),
+            ))
+        })
+    }
+
+    /// 把 token 拼进远程 URL：https://<token>@github.com/owner/repo.git
+    fn build_authed_remote(remote_url: &str, token: &str) -> String {
+        let url = remote_url.trim();
+        if token.is_empty() {
+            return url.to_string();
+        }
+        if let Some(rest) = url.strip_prefix("https://") {
+            // 去掉已有的 user@ 前缀，避免重复
+            let rest = match rest.split_once('@') {
+                Some((_, after)) => after,
+                None => rest,
+            };
+            format!("https://{token}@{rest}")
+        } else {
+            url.to_string()
+        }
+    }
+
+    /// 把可能出现在错误信息里的 token 抹掉，避免泄露到日志/前端。
+    fn redact_token(msg: &str) -> String {
+        // https://<token>@host → https://***@host
+        let mut out = String::with_capacity(msg.len());
+        for part in msg.split_whitespace() {
+            if let Some(idx) = part.find("://") {
+                let (scheme, rest) = part.split_at(idx + 3);
+                if let Some((_, after)) = rest.split_once('@') {
+                    out.push_str(scheme);
+                    out.push_str("***@");
+                    out.push_str(after);
+                    out.push(' ');
+                    continue;
+                }
+            }
+            out.push_str(part);
+            out.push(' ');
+        }
+        out.trim_end().to_string()
+    }
 }
 
 // ========== 迁移支持 ==========
@@ -3123,5 +3695,116 @@ mod tests {
             dest.join("SKILL.md").is_file(),
             "existing destination skill should be preserved"
         );
+    }
+
+    #[test]
+    fn backup_candidate_marks_db_repo_skill_as_hub() {
+        let mut managed: HashMap<String, InstalledSkill> = HashMap::new();
+        managed.insert(
+            "algorithmic-art".to_string(),
+            InstalledSkill {
+                id: "anthropics/skills:algorithmic-art".to_string(),
+                name: "algorithmic-art".to_string(),
+                description: None,
+                directory: "algorithmic-art".to_string(),
+                repo_owner: Some("anthropics".to_string()),
+                repo_name: Some("skills".to_string()),
+                repo_branch: Some("main".to_string()),
+                readme_url: None,
+                apps: SkillApps::default(),
+                installed_at: 0,
+                content_hash: None,
+                updated_at: 0,
+            },
+        );
+        let lock: HashMap<String, LockRepoInfo> = HashMap::new();
+
+        let c = SkillService::build_backup_candidate(
+            "algorithmic-art",
+            "algorithmic-art".to_string(),
+            None,
+            Path::new("/tmp/algorithmic-art"),
+            "cc-switch",
+            &managed,
+            &lock,
+        );
+        assert_eq!(c.source_type, "hub");
+        assert_eq!(c.repo_owner.as_deref(), Some("anthropics"));
+        assert_eq!(c.repo_name.as_deref(), Some("skills"));
+    }
+
+    #[test]
+    fn backup_candidate_marks_lock_skill_as_hub() {
+        let managed: HashMap<String, InstalledSkill> = HashMap::new();
+        let mut lock: HashMap<String, LockRepoInfo> = HashMap::new();
+        lock.insert(
+            "tdd".to_string(),
+            LockRepoInfo {
+                owner: "mattpocock".to_string(),
+                repo: "skills".to_string(),
+                skill_path: Some("skills/engineering/tdd/SKILL.md".to_string()),
+                branch: None,
+            },
+        );
+
+        let c = SkillService::build_backup_candidate(
+            "tdd",
+            "tdd".to_string(),
+            None,
+            Path::new("/tmp/tdd"),
+            "agents",
+            &managed,
+            &lock,
+        );
+        assert_eq!(c.source_type, "hub");
+        assert_eq!(c.repo_owner.as_deref(), Some("mattpocock"));
+        assert_eq!(
+            c.skill_path.as_deref(),
+            Some("skills/engineering/tdd/SKILL.md")
+        );
+    }
+
+    #[test]
+    fn backup_candidate_defaults_unknown_to_local() {
+        let managed: HashMap<String, InstalledSkill> = HashMap::new();
+        let lock: HashMap<String, LockRepoInfo> = HashMap::new();
+
+        let c = SkillService::build_backup_candidate(
+            "auto-memory",
+            "auto-memory".to_string(),
+            None,
+            Path::new("/tmp/auto-memory"),
+            "cc-switch",
+            &managed,
+            &lock,
+        );
+        assert_eq!(c.source_type, "local");
+        assert!(c.repo_owner.is_none());
+    }
+
+    #[test]
+    fn build_authed_remote_embeds_token() {
+        assert_eq!(
+            SkillService::build_authed_remote("https://github.com/o/r.git", "ghp_x"),
+            "https://ghp_x@github.com/o/r.git"
+        );
+        // 已有 user@ 前缀时不重复
+        assert_eq!(
+            SkillService::build_authed_remote("https://old@github.com/o/r.git", "ghp_x"),
+            "https://ghp_x@github.com/o/r.git"
+        );
+        // 空 token 原样返回
+        assert_eq!(
+            SkillService::build_authed_remote("https://github.com/o/r.git", ""),
+            "https://github.com/o/r.git"
+        );
+    }
+
+    #[test]
+    fn redact_token_hides_credentials_in_url() {
+        let msg = "fatal: push to https://ghp_secret@github.com/o/r.git failed";
+        let redacted = SkillService::redact_token(msg);
+        assert!(!redacted.contains("ghp_secret"), "token leaked: {redacted}");
+        assert!(redacted.contains("***@github.com/o/r.git"));
     }
 }

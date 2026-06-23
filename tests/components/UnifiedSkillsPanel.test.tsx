@@ -73,6 +73,14 @@ vi.mock("@/hooks/useSkills", () => ({
     mutateAsync: vi.fn(),
     isPending: false,
   }),
+  useScanBackupCandidates: () => ({
+    data: [],
+    refetch: vi.fn(),
+  }),
+  useBackupToGithub: () => ({
+    mutateAsync: vi.fn(),
+    isPending: false,
+  }),
 }));
 
 describe("UnifiedSkillsPanel", () => {

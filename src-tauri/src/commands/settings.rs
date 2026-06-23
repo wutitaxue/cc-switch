@@ -36,6 +36,20 @@ fn merge_settings_for_save(
         }
         _ => {}
     }
+    match (&mut incoming.github_backup, &existing.github_backup) {
+        // incoming 没有 github 备份设置 → 保留现有
+        (None, _) => {
+            incoming.github_backup = existing.github_backup.clone();
+        }
+        // incoming 有但 token 为空，且现有有 token → 填回现有 token
+        // （get_settings_for_frontend 总是清空 token，空 token 意味着"保持现有"）
+        (Some(incoming_gh), Some(existing_gh))
+            if incoming_gh.token.is_empty() && !existing_gh.token.is_empty() =>
+        {
+            incoming_gh.token = existing_gh.token.clone();
+        }
+        _ => {}
+    }
     // local_migrations 是纯后端状态（迁移完成标记），前端没有合法的修改场景，
     // 无条件取现有值。若按 incoming 透传：后端清掉 marker（如关闭统一会话
     // 开关）后、前端 query 缓存刷新前的一次全量保存会把旧 marker 重放回来，

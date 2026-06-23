@@ -12,6 +12,8 @@ import {
   type InstalledSkill,
   type SkillUpdateInfo,
   type SkillsShSearchResult,
+  type BackupCandidate,
+  type BackupResult,
 } from "@/lib/api/skills";
 import type { AppId } from "@/lib/api/types";
 import { mergeImportedSkills } from "@/hooks/useSkills.helpers";
@@ -345,6 +347,26 @@ export function useSearchSkillsSh(
   });
 }
 
+/**
+ * 扫描所有位置的 skill，供勾选备份到 GitHub
+ */
+export function useScanBackupCandidates() {
+  return useQuery({
+    queryKey: ["skills", "backupCandidates"],
+    queryFn: () => skillsApi.scanBackupCandidates(),
+    enabled: false, // 手动触发
+  });
+}
+
+/**
+ * 把选中的 skill 备份到 GitHub
+ */
+export function useBackupToGithub() {
+  return useMutation({
+    mutationFn: (selected: string[]) => skillsApi.backupToGithub(selected),
+  });
+}
+
 // ========== 辅助类型 ==========
 
 export type {
@@ -354,5 +376,7 @@ export type {
   SkillBackupEntry,
   SkillUpdateInfo,
   SkillsShSearchResult,
+  BackupCandidate,
+  BackupResult,
   AppId,
 };
